@@ -1,0 +1,728 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["linux-musl-openssl-3.0.x","debian-openssl-1.1.x", "darwin", "darwin-arm64", "debian-openssl-3.0.x", "windows"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DebtAccountType {
+  loan
+  credit
+}
+
+enum AccountFrom {
+  PLAID
+  MANUAL
+}
+
+enum InvoiceStatus {
+  Pending
+  Overdue
+  Paid
+  Draft
+}
+
+enum PaymentOption {
+  Stripe
+  Paypal
+  Venmo
+  Zelle
+  ACH
+  Other
+}
+
+enum DebtType {
+  CreditCard
+  AutoLoan
+  PersonalLoan
+  StudentLoan
+  Mortgage
+  MedicalLoan
+  Taxes
+  BusinessLoan
+  Other
+}
+
+enum DebitType {
+  CreditCard
+  AutoLoan
+  PersonalLoan
+  StudentLoan
+  Mortgage
+  MedicalLoan
+  Taxes
+  BusinessLoan
+  Other
+}
+
+enum SubscriptionStatus {
+  active
+  cancelled
+  failed
+}
+
+enum Periodicity {
+  MONTH
+}
+
+enum AccountCategory {
+  personal
+  business
+  mixed
+}
+
+enum ElementStatus {
+  ARCHIVED
+  DELETED
+  ACTIVE
+}
+
+enum VerificationType {
+  signup
+  passwordReset
+  updateProfile
+  passwordUpdateAPI
+}
+
+enum AccountType {
+  google
+  credentials
+}
+
+enum NotificationChannel {
+  APN
+  EMAIL
+  IN_APP
+}
+
+enum NotificationStatus {
+  CREATED
+  SENT
+  FAILED
+  READ
+  PUBLISHED
+}
+
+model User {
+  id                       String                    @id @default(cuid())
+  name                     String
+  email                    String                    @unique
+  password                 String?
+  userType                 String                    @default("solopreneur") // 'solopreneur' or 'bookkeeper'
+  firstName                String?
+  lastName                 String?
+  phone                    String?
+  company                  String?
+  phoneNumber              String?
+  createdAt                DateTime                  @default(now()) @map("created_at")
+  lastLogin                DateTime                  @default(now()) @map("last_login")
+  
+  // Subscription & Trial
+  stripeCustomerId         String?
+  stripeConnectedAccountId String?
+  subscriptionStatus       SubscriptionStatus?
+  isActive                 Boolean?
+  isTrial                  Boolean?
+  trialEndsAt              DateTime?
+  isShowPaywall            Boolean?
+  isAddedFreeStrategy      Boolean?
+  
+  // Profile & Business
+  priority                 String[]
+  loginType                AccountType?
+  isVerified               Boolean                   @default(false)
+  conversationId           String?
+  businessColor            String?
+  personalColor            String?
+  profileUrl               String?
+  location                 String?
+  industry                 String?
+  businessName             String?
+  incorporationType        String?
+  isOnboarding             Boolean?
+  status                   ElementStatus?
+  isDarkMode               Boolean?
+  deviceToken              String?                   @map("device_token")
+
+  // Relations
+  debts                    FinancialRecord[]
+  paymentSchedule          PaymentSchedule[]
+  snowball                 SnowballPaymentSchedule[]
+  clients                  Client[]
+  businesses               Business[]
+  invoices                 Invoice[]
+  transactions             Transaction[]
+  accounts                 Account[]
+  debtAccounts             DebtAccount[]
+  connectedEmails          ConnectedEmail[]
+  budgetEntries            BudgetEntry[]
+  budgetMonths             BudgetMonth[]
+  plaidLinks               PlaidLink[]
+  notifications            Notification[]
+  
+  // Bookkeeper relations
+  bookkeeperRelations      BookkeeperClient[] @relation("BookkeeperUser")
+  clientRelations          BookkeeperClient[] @relation("ClientUser")
+
+  @@index([email])
+  @@map("users")
+}
+
+// Bookkeeper-Client relationship table
+model BookkeeperClient {
+  id                Int      @id @default(autoincrement())
+  bookkeeperUserId  String
+  clientUserId      String
+  accessLevel       String   @default("full")
+  status            String   @default("active")
+  notes             String?  // Client notes
+  tags              String?  // JSON string array of tags
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  bookkeeper        User     @relation("BookkeeperUser", fields: [bookkeeperUserId], references: [id])
+  client            User     @relation("ClientUser", fields: [clientUserId], references: [id])
+
+  accessibleAccounts BookkeeperAccountAccess[]
+
+  @@map("bookkeeper_clients")
+}
+
+model Account {
+  id              String           @id @default(cuid())
+  userId          String           @map("user_id")
+  user            User             @relation(fields: [userId], references: [id])
+  accountFrom     AccountFrom
+  accountCategory AccountCategory?
+
+  name                   String
+  type                   String
+  superType              String?
+  bankName               String?
+  alias                  String?
+  balance                Float?
+  availableBalance       Float?
+  initialBalance         Float?
+  isoCurrencyCode        String?
+  unofficialCurrencyCode String?
+
+  // Plaid specific
+  itemId         String?
+  status         ElementStatus?
+  plaidAccountId String?       @unique
+  mask           String?
+  officialName   String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  bookkeeperAccess BookkeeperAccountAccess[]
+
+  @@unique([plaidAccountId, userId])
+  @@index([userId])
+  @@index([plaidAccountId])
+}
+
+model BookkeeperAccountAccess {
+  id                 Int      @id @default(autoincrement())
+  bookkeeperClientId Int
+  accountId          String
+
+  // You can add more granular controls here if needed
+  // accessLevel        String   @default("full") // e.g., 'read', 'full'
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  bookkeeperClient   BookkeeperClient @relation(fields: [bookkeeperClientId], references: [id], onDelete: Cascade)
+  account            Account          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([bookkeeperClientId, accountId], name: "unique_bookkeeper_account_access")
+  @@map("bookkeeper_account_access")
+}
+
+model DebtAccount {
+  id              String           @id @default(cuid())
+  userId          String           @map("user_id")
+  user            User             @relation(fields: [userId], references: [id])
+  accountFrom     AccountFrom
+  accountCategory AccountCategory?
+
+  name               String
+  type               String?
+  superType          DebtAccountType
+  bankName           String?
+  alias              String?
+  balance            Float?          @map("balance")
+  initialBalance     Float?          @map("initial_balance")
+  minPaymentAmount   Float?          @map("min_payment_amount")
+  aprs               Json?
+  apr                Float?
+  paymentDueDate     DateTime?       @map("payment_due_date")
+  extraPaymentAmount Float?          @default(0) @map("extra_payment_amount")
+  lastPaymentAmount  Float?          @map("last_payment_amount")
+  lastPaymentDate    DateTime?       @map("last_payment_date")
+  availableBalance   Float?
+
+  // Plaid specific
+  itemId         String?
+  status         ElementStatus?
+  plaidAccountId String?       @unique
+  mask           String?
+  officialName   String?
+
+  // Loan specific
+  originationDate  DateTime?
+  ytdInterestPaid  Float?
+  ytdPrincipalPaid Float?
+
+  // Credit card specific
+  creditLimit Float?
+  isOverdue   Boolean?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([plaidAccountId, userId])
+  @@index([userId])
+}
+
+model Transaction {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+  accountFrom AccountFrom
+  
+  name        String
+  amount      Float
+  description String?
+  receiptUrl  String?
+  category    String?
+  categoryId  String?
+  subcategory String?
+  subcategoryId String?
+
+  // Plaid category info
+  plaidCategory        String?
+  plaidSubcategory     String?
+  plaidPrimary         String?
+  plaidDetailed        String?
+  plaidConfidenceLevel String?
+  plaidCategoryUrl     String?
+
+  // Plaid account info
+  transactionId String @unique
+  accountId     String
+
+  // Currency info
+  isoCurrencyCode        String?
+  unofficialCurrencyCode String?
+
+  // Time/date
+  date  DateTime
+  year  Int
+  month Int
+
+  // Plaid merchant info
+  merchantName String?
+  merchantLogo String?
+
+  // Plaid transaction info
+  paymentChannel  String?
+  paymentMeta     Json?
+  referenceNumber String?
+  transactionCode String?
+
+  accountCategory AccountCategory?
+  status          ElementStatus?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([transactionId])
+  @@index([userId])
+  @@index([accountId])
+}
+
+model Client {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  name           String
+  email          String?
+  contactNumber  String?
+  billingAddress String?
+  
+  invoices       Invoice[]
+  
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+}
+
+model Business {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  name              String
+  email             String?
+  contactNumber     String?
+  billingAddress    String?
+  logoUrl           String?
+  industry          String?
+  incorporationType String?
+
+  invoices        Invoice[]
+  connectedEmails ConnectedEmail[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  clientId      String
+  client        Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  businessId    String?
+  business      Business?     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  transactionId String?       @unique
+  accountId     String?
+  amount        Float?
+  status        InvoiceStatus @default(Pending)
+  dueDate       DateTime?
+  notes         String?
+  
+  // Payment info
+  paymentMethods String[] // array of PaymentMethod ids
+  paymentMethod  String?
+  paymentLink    String?
+  tax            Float?
+  discount       Float?
+
+  accountCategory AccountCategory?
+  
+  lineItems        LineItem[]
+  connectedEmail   ConnectedEmail? @relation(fields: [connectedEmailId], references: [id])
+  connectedEmailId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([clientId])
+}
+
+model LineItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Int
+  unitPrice   Float
+  
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([invoiceId])
+}
+
+model ConnectedEmail {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email    String @unique
+  provider String @default("gmail")
+
+  // OAuth tokens
+  accessToken  String?
+  refreshToken String?
+  tokenExpiry  DateTime?
+  isConnected  Boolean   @default(false)
+
+  // Metadata
+  displayName    String?
+  profilePicture String?
+  lastUsed       DateTime?
+
+  businesses Business[]
+  invoices   Invoice[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([email])
+  @@index([isConnected])
+}
+
+model BudgetEntry {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id])
+  year       Int
+  month      Int
+  categoryId String
+  amount     Float?
+  type       AccountCategory?
+
+  @@unique([year, month, categoryId, type, userId])
+  @@index([userId])
+  @@index([categoryId])
+  @@index([year, month])
+}
+
+model BudgetMonth {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id])
+  income          Float
+  needs           Json
+  wants           Json
+  savings         Json
+  debts           Json
+  assets          Json?
+  month           Float
+  year            Float
+  accountCategory AccountCategory?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, year, month, accountCategory])
+}
+
+model FinancialRecord {
+  id              String            @id @default(cuid())
+  userId          String?           @map("user_id")
+  user            User?             @relation(fields: [userId], references: [id])
+  title           String
+  type            DebitType
+  subtype         String?
+  periodicity     Periodicity
+  initialBalance  Float             @map("initial_outstanding_balance")
+  interestRate    Float             @map("interest_rate")
+  minPayAmount    Float             @map("minimum_payment")
+  payDueDate      DateTime          @map("payment_due_date")
+  extraPayAmount  Float             @default(0) @map("extra_payment")
+  bank            String?
+  accountCategory AccountCategory?
+  
+  paymentSchedules PaymentSchedule[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([title, userId])
+}
+
+model PaymentSchedule {
+  id                  String           @id @default(cuid())
+  userId              String?
+  user                User?            @relation(fields: [userId], references: [id])
+  financialRecordId   String?          @map("financial_record_id")
+  financialRecord     FinancialRecord? @relation(fields: [financialRecordId], references: [id])
+  
+  paymentDate         DateTime         @map("payment_due_date")
+  title               String           @map("title")
+  monthlyInterestPaid Float            @map("monthly_interest")
+  monthlyPayment      Float            @map("monthly_payment")
+  remainingBalance    Float            @map("remaining_balance")
+  extraPayAmount      Float            @default(0) @map("extra_payment")
+  minPayAmount        Float            @map("minimum_payment")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([paymentDate, title, userId])
+}
+
+model SnowballPaymentSchedule {
+  id                  String   @id @default(cuid())
+  userId              String?
+  user                User?    @relation(fields: [userId], references: [id])
+  paymentDate         DateTime @map("payment_due_date")
+  totalInitialBalance Float    @map("total_initial_balance")
+  monthTotalPayment   Float    @map("month_total_payment")
+  extraPayAmount      Float    @map("extra_pay_amount")
+  totalInterestPaid   Float    @map("total_interest_paid")
+  remainingBalance    Float    @map("balance_until_now")
+  data                Json     @map("data")
+
+  @@unique([userId, paymentDate])
+  @@map("snowball_payment_schedule")
+}
+
+model PlaidLink {
+  id                  String        @id @default(cuid())
+  userId              String
+  user                User          @relation(fields: [userId], references: [id])
+  itemId              String
+  accessToken         String
+  institutionName     String
+  institutionID       String
+  status              String?
+  transactionsCursor  String?
+  needsRelink         Boolean       @default(false)
+  hasWebhookSet       Boolean       @default(false)
+  newTransactionsSync Boolean       @default(false)
+  errorCode           String?
+  lastRefreshedAt     DateTime?
+  linkStatus          ElementStatus?
+
+  accounts     PlaidAccount[]
+  transactions PlaidTransaction[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([itemId])
+}
+
+model PlaidAccount {
+  id                     String             @id @default(cuid())
+  plaidAccountId         String?            @unique
+  itemId                 String
+  plaidLink              PlaidLink          @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  name                   String
+  mask                   String?
+  officialName           String?
+  currentBalance         Float?
+  availableBalance       Float?
+  isoCurrencyCode        String?
+  unofficialCurrencyCode String?
+  type                   String
+  subtype                String?
+  accountCategory        AccountCategory?
+  bank                   String?
+  bankId                 String?
+
+  transactions PlaidTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("accounts_table")
+}
+
+model PlaidTransaction {
+  id                     Int              @id @default(autoincrement())
+  plaidTransactionId     String           @unique
+  itemId                 String
+  plaidLink              PlaidLink        @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  accountId              String
+  account                PlaidAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  
+  category               String?
+  subcategory            String?
+  type                   String?
+  subtype                String?
+  name                   String
+  amount                 Float
+  isoCurrencyCode        String?
+  unofficialCurrencyCode String?
+  date                   DateTime         @db.Date
+  year                   Int
+  month                  Int
+  pending                Boolean
+  accountOwner           String?
+  accountCategory        AccountCategory?
+  logoUrl                String?
+  categoryUrl            String?
+  website                String?
+  bank                   String?
+  userId                 String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("transactions")
+}
+
+model PaymentMethod {
+  id         String        @id @default(cuid())
+  method     PaymentOption
+  userTag    String?
+  paymentUrl String?
+}
+
+model DeviceNotificationToken {
+  id     String @id @default(cuid())
+  userId String @unique
+  token  String
+
+  @@index([userId])
+}
+
+model verificationToken {
+  id        String           @id @default(cuid())
+  type      VerificationType
+  token     String
+  email     String
+  createdAt DateTime         @default(now())
+  expiresAt DateTime
+  used      Boolean          @default(false)
+}
+
+model LinkEventsTable {
+  id            Int      @id @default(autoincrement())
+  type          String   @map("type")
+  userId        Int?     @map("user_id")
+  linkSessionId String?  @map("link_session_id")
+  requestId     String   @unique @map("request_id")
+  errorType     String?  @map("error_type")
+  errorCode     String?  @map("error_code")
+  status        String?  @map("status")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("link_events_table")
+}
+
+model PlaidApiEventsTable {
+  id          Int      @id @default(autoincrement())
+  itemId      Int?     @map("item_id")
+  userId      Int?     @map("user_id")
+  plaidMethod String   @map("plaid_method")
+  arguments   String?  @map("arguments")
+  requestId   String   @unique @map("request_id")
+  errorType   String?  @map("error_type")
+  errorCode   String?  @map("error_code")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("plaid_api_events_table")
+}
+
+model Notification {
+  id               String             @id @default(cuid())
+  userId           String
+  user             User               @relation(fields: [userId], references: [id])
+  message          String
+  title            String?
+  notificationType String
+  channel          NotificationChannel
+  status           NotificationStatus @default(CREATED)
+  metadata         Json?
+  sentAt           DateTime?
+  readAt           DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model NotificationTemplate {
+  id          String   @id
+  name        String
+  description String
+  template    String
+  channels    String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
