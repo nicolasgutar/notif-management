@@ -1,6 +1,24 @@
 import { Request, Response } from 'express';
 import { schedulerService } from '../services/scheduler.service';
 
+// Helper to convert Google Protobuf Timestamp to ISO String
+const formatGoogleTimestamp = (timestamp: any): string | null => {
+    if (!timestamp) return null;
+
+    // If it's already a string, return it
+    if (typeof timestamp === 'string') return timestamp;
+
+    // Use seconds/nanos if available
+    if (timestamp.seconds || timestamp.nanos) {
+        const seconds = Number(timestamp.seconds || 0);
+        const nanos = Number(timestamp.nanos || 0);
+        // Create date (seconds * 1000 + nanos / 1000000)
+        return new Date(seconds * 1000 + nanos / 1_000_000).toISOString();
+    }
+
+    return null;
+};
+
 export const getSchedules = async (req: Request, res: Response) => {
     try {
         const jobs = await schedulerService.listJobs();
@@ -27,8 +45,8 @@ export const getSchedules = async (req: Request, res: Response) => {
                 channelId: payload.channel || '',
                 cronExpression: job.schedule,
                 enabled: job.state === 'ENABLED',
-                lastRun: job.lastAttemptTime?.toString() || null, // Simplified
-                nextRun: job.scheduleTime?.toString() || null, // Not always directly available in list
+                lastRun: formatGoogleTimestamp(job.lastAttemptTime),
+                nextRun: formatGoogleTimestamp(job.scheduleTime),
                 description: job.description
             };
         });

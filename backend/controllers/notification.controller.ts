@@ -17,6 +17,7 @@ import { emailService } from '../services/email/email.service';
 import { EmailTemplate } from '../services/email/EmailTemplate';
 import { EmailConfig, EmailRequest } from '../services/email/types';
 import { sendPushNotification } from '../services/apn.service';
+import { IncorporationType } from '../types/incorporation';
 
 const DEFAULT_EMAIL_CONFIG: EmailConfig = {
     theme: {
@@ -230,8 +231,88 @@ const generateNotificationsInternal = async (type: string, channel: Notification
             }
             break;
         }
-        default:
-            throw new Error('Invalid notification type');
+        default: {
+            // Generic Broadcast Logic
+            // If we have a template, we assume it's a broadcast to all active users
+            console.log(`Processing generic notification type: ${type}`);
+
+            let users;
+
+            if (type.startsWith('reminder_solo_') || type.startsWith('reminder_llc_')) {
+                // Focus on LLC (previously Solo/DBA/Single-Member LLC)
+                console.log('Targeting LLC users');
+                users = await prisma.user.findMany({
+                    where: {
+                        incorporationType: { in: [IncorporationType.LLC, 'Solo', 'DBA', 'Single-Member LLC'] },
+                        OR: [{ status: 'ACTIVE' }, { status: null }]
+                    },
+                    select: { id: true, firstName: true, email: true, deviceToken: true, incorporationType: true }
+                });
+            } else if (type.startsWith('reminder_scorp_')) {
+                // S-Corp & Multi-Member LLC
+                console.log('Targeting S-Corp users');
+                users = await prisma.user.findMany({
+                    where: {
+                        incorporationType: { in: [IncorporationType.S_CORP, 'S-Corp', 'Multi-Member LLC', 'Partnership'] },
+                        OR: [{ status: 'ACTIVE' }, { status: null }]
+                    },
+                    select: { id: true, firstName: true, email: true, deviceToken: true, incorporationType: true }
+                });
+            } else if (type.startsWith('reminder_ccorp_')) {
+                // C-Corp
+                console.log('Targeting C-Corp users');
+                users = await prisma.user.findMany({
+                    where: {
+                        incorporationType: { in: [IncorporationType.C_CORP, 'C-Corp'] },
+                        OR: [{ status: 'ACTIVE' }, { status: null }]
+                    },
+                    select: { id: true, firstName: true, email: true, deviceToken: true, incorporationType: true }
+                });
+            } else {
+                // Generic Broadcast
+                console.log('Targeting ALL active users (Broadcast)');
+                users = await prisma.user.findMany({
+                    where: {
+                        OR: [
+                            { status: 'ACTIVE' },
+                            { status: null }
+                        ]
+                    },
+                    select: { id: true, firstName: true, email: true, deviceToken: true, incorporationType: true }
+                });
+            }
+
+            const now = new Date();
+            const currentYear = now.getFullYear();
+            const lastYear = currentYear - 1;
+
+            for (const user of users) {
+                const userName = user.firstName || user.email || 'User';
+
+                // Validation: Log warning if user has invalid incorporation type
+                // @ts-ignore - incorporationType is selected but might not be in the type definition used elsewhere
+                if (user.incorporationType && !isValidIncorporationType(user.incorporationType)) {
+                    console.warn(`User ${user.id} has invalid incorporation type: ${user.incorporationType}`);
+                }
+
+                // Interpolate message with common variables
+                const message = interpolate(templateString, {
+                    username: userName, // key from prompt
+                    userName: userName, // consistent key
+                    year: currentYear,
+                    lastYear: lastYear
+                });
+
+                notificationsData.push({
+                    userId: user.id,
+                    title: templateName,
+                    message,
+                    metadata: { type: 'broadcast', year: currentYear },
+                    deviceToken: user.deviceToken
+                });
+            }
+            break;
+        }
     }
 
     if (notificationsData.length > 0) {

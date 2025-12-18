@@ -32,6 +32,7 @@ const ScheduleManager: React.FC = () => {
                 }
             });
             const data = await res.json();
+            console.log("data", data.data);
             if (data.data) setSchedules(data.data);
         } catch (error) {
             console.error('Failed to fetch schedules', error);
